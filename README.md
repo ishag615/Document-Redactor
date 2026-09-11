@@ -24,4 +24,6 @@ Open `http://127.0.0.1:5001`.
   - Emails, phone numbers, addresses, dates of birth, usernames, passwords, API keys, and IP addresses
 - Lets the user choose which findings to redact.
 - Generates a redacted copy in the same file format as the upload.
+- Preserves PDF page layout by applying black redaction boxes over selected text in the original PDF.
+- Masks selected text in DOCX and PPTX files in-place so the original document structure is kept as much as possible.
 - Keeps uploaded and redacted files only for the current browser session.

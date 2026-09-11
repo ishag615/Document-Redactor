@@ -348,12 +348,13 @@ function renderFindings(report) {
 }
 
 function findingRow(finding) {
+  const location = finding.page ? `Page ${finding.page} · Characters ${finding.start}-${finding.end}` : `Characters ${finding.start}-${finding.end}`;
   return `
     <label class="finding">
       <input type="checkbox" class="finding-check" value="${finding.id}" checked onchange="updateSelectionCount()">
       <div>
         <div class="finding-title">${escHtml(finding.display_name || finding.type)}</div>
-        <div class="finding-meta">Characters ${finding.start}-${finding.end} · ${escHtml(finding.detection_method)}</div>
+        <div class="finding-meta">${location} · ${escHtml(finding.detection_method)}</div>
       </div>
       <span class="masked">${escHtml(finding.value)}</span>
       ${riskBadge(finding.risk_level)}

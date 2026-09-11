@@ -6,7 +6,6 @@ Small Flask app for text-only PII detection and redaction.
 from __future__ import annotations
 
 import atexit
-import json
 import logging
 import re
 import shutil
@@ -17,12 +16,17 @@ from typing import Dict, Iterable, List, Tuple
 
 import PyPDF2
 from docx import Document as DocxDocument
+from docx.enum.text import WD_COLOR_INDEX
+from docx.shared import RGBColor as DocxRGBColor
 from flask import Flask, jsonify, render_template, request, send_file, session
 from pptx import Presentation
-from reportlab.lib.pagesizes import letter
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer
+from pptx.dml.color import RGBColor as PptxRGBColor
 from werkzeug.utils import secure_filename
+
+try:
+    import fitz
+except ImportError:
+    fitz = None
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -154,6 +158,7 @@ PII_PATTERNS = [
 ]
 
 RISK_SCORE = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
+MASK_CHAR = "█"
 
 
 def get_session_id() -> str:
@@ -219,15 +224,21 @@ def extract_text(path: Path, file_type: str) -> Tuple[str, Dict]:
 
     if file_type == "pdf":
         parts = []
+        page_text = []
         with path.open("rb") as handle:
             reader = PyPDF2.PdfReader(handle)
             page_count = len(reader.pages)
             for page_num, page in enumerate(reader.pages, start=1):
-                page_text = page.extract_text() or ""
-                if page_text.strip():
-                    parts.append(f"[PAGE {page_num}]\n{page_text}")
+                text = page.extract_text() or ""
+                page_text.append({"page": page_num, "text": text})
+                if text.strip():
+                    parts.append(text)
         text = "\n\n".join(parts)
-        return text, {"extraction_method": "PDF embedded text", "pages": page_count}
+        return text, {
+            "extraction_method": "PDF embedded text",
+            "pages": page_count,
+            "page_text": page_text,
+        }
 
     if file_type == "docx":
         doc = DocxDocument(path)
@@ -287,7 +298,7 @@ def match_value_span(match: re.Match) -> Tuple[int, int, str]:
     return match.start(), match.end(), match.group(0).strip()
 
 
-def scan_text(text: str) -> List[Dict]:
+def scan_text(text: str, base_offset: int = 0, page: int | None = None) -> List[Dict]:
     findings = []
     seen = set()
     for pattern in PII_PATTERNS:
@@ -295,23 +306,38 @@ def scan_text(text: str) -> List[Dict]:
             start, end, value = match_value_span(match)
             if pattern.get("validator") == "luhn" and not luhn_valid(value):
                 continue
-            key = (pattern["type"], start, end, value.lower())
+            absolute_start = base_offset + start
+            absolute_end = base_offset + end
+            key = (pattern["type"], absolute_start, absolute_end, value.lower(), page)
             if key in seen:
                 continue
             seen.add(key)
-            findings.append({
-                "id": len(findings),
+            finding = {
                 "type": pattern["type"],
                 "display_name": pattern["label"],
                 "value": mask_value(value),
                 "raw_value": value,
-                "start": start,
-                "end": end,
-                "length": end - start,
+                "start": absolute_start,
+                "end": absolute_end,
+                "length": absolute_end - absolute_start,
                 "risk_level": pattern["risk"],
                 "detection_method": "regex",
-            })
-    return merge_overlaps(findings)
+            }
+            if page is not None:
+                finding["page"] = page
+            findings.append(finding)
+    return assign_finding_ids(merge_overlaps(findings))
+
+
+def scan_pdf_pages(page_text: List[Dict]) -> List[Dict]:
+    findings = []
+    offset = 0
+    for page in page_text:
+        text = page.get("text", "")
+        page_number = page.get("page")
+        findings.extend(scan_text(text, base_offset=offset, page=page_number))
+        offset += len(text) + 2
+    return assign_finding_ids(merge_overlaps(findings))
 
 
 def merge_overlaps(findings: List[Dict]) -> List[Dict]:
@@ -324,6 +350,12 @@ def merge_overlaps(findings: List[Dict]) -> List[Dict]:
     return sorted(kept, key=lambda item: item["start"])
 
 
+def assign_finding_ids(findings: List[Dict]) -> List[Dict]:
+    for idx, finding in enumerate(findings):
+        finding["id"] = idx
+    return findings
+
+
 def redact_text(text: str, findings: Iterable[Dict]) -> str:
     redacted = []
     cursor = 0
@@ -333,7 +365,7 @@ def redact_text(text: str, findings: Iterable[Dict]) -> str:
         if start < cursor:
             continue
         redacted.append(text[cursor:start])
-        redacted.append(f"[REDACTED_{finding['type']}]")
+        redacted.append(mask_span(text[start:end]))
         cursor = end
     redacted.append(text[cursor:])
     return "".join(redacted)
@@ -342,6 +374,10 @@ def redact_text(text: str, findings: Iterable[Dict]) -> str:
 def redact_selected_text(text: str, findings: List[Dict], selected_ids: Iterable[int]) -> str:
     selected = {int(item) for item in selected_ids}
     return redact_text(text, [finding for finding in findings if finding["id"] in selected])
+
+
+def mask_span(value: str, fill: str = MASK_CHAR) -> str:
+    return "".join("\n" if char == "\n" else fill for char in value)
 
 
 def public_findings(findings: Iterable[Dict]) -> List[Dict]:
@@ -373,10 +409,6 @@ def protected_output_path(session_dir: Path, filename: str, doc_id: str, file_ty
     return session_dir / f"redacted_{doc_id}_{stem}{suffix}"
 
 
-def replacement_for(finding: Dict) -> str:
-    return f"[REDACTED_{finding['type']}]"
-
-
 def save_redacted_file(doc: Dict, selected_ids: Iterable[int]) -> Path:
     original_path = Path(doc["original_path"])
     selected = {int(item) for item in selected_ids}
@@ -386,7 +418,7 @@ def save_redacted_file(doc: Dict, selected_ids: Iterable[int]) -> Path:
     if doc["file_type"] == "text":
         output_path.write_text(redact_text(doc["extracted_text"], findings), encoding="utf-8")
     elif doc["file_type"] == "pdf":
-        write_text_pdf(redact_text(doc["extracted_text"], findings), output_path)
+        redact_pdf(original_path, output_path, findings)
     elif doc["file_type"] == "docx":
         redact_docx(original_path, output_path, findings)
     elif doc["file_type"] == "pptx":
@@ -396,63 +428,212 @@ def save_redacted_file(doc: Dict, selected_ids: Iterable[int]) -> Path:
     return output_path
 
 
-def write_text_pdf(text: str, output_path: Path) -> None:
-    styles = getSampleStyleSheet()
-    story = []
-    for line in text.splitlines() or [""]:
-        if line.startswith("[PAGE ") and story:
-            story.append(PageBreak())
-            story.append(Paragraph(escape_pdf_text(line), styles["Heading3"]))
-        else:
-            story.append(Paragraph(escape_pdf_text(line) or "&nbsp;", styles["BodyText"]))
-        story.append(Spacer(1, 3))
-    SimpleDocTemplate(str(output_path), pagesize=letter).build(story)
+def selected_raw_values(findings: List[Dict]) -> List[str]:
+    values = []
+    seen = set()
+    for finding in sorted(findings, key=lambda item: item["length"], reverse=True):
+        value = finding.get("raw_value", "")
+        key = value.lower()
+        if not value or key in seen:
+            continue
+        seen.add(key)
+        values.append(value)
+    return values
 
 
-def escape_pdf_text(text: str) -> str:
-    return (
-        text.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace(" ", "&nbsp;")
-    )
+def redact_pdf(input_path: Path, output_path: Path, findings: List[Dict]) -> None:
+    if fitz is None:
+        raise RuntimeError("PDF visual redaction requires PyMuPDF. Run `pip install -r requirements.txt` and restart the app.")
+
+    document = fitz.open(str(input_path))
+    redaction_count = 0
+    try:
+        for finding in findings:
+            value = finding.get("raw_value", "")
+            if not value:
+                continue
+            page_number = finding.get("page")
+            if page_number and 1 <= int(page_number) <= document.page_count:
+                pages = [document[int(page_number) - 1]]
+            else:
+                pages = list(document)
+
+            for page in pages:
+                for rect in page.search_for(value):
+                    padded = fitz.Rect(rect.x0 - 0.75, rect.y0 - 0.75, rect.x1 + 0.75, rect.y1 + 0.75)
+                    page.add_redact_annot(padded, fill=(0, 0, 0))
+                    redaction_count += 1
+
+        if redaction_count == 0:
+            raise ValueError("Selected text could not be located in the original PDF. The PDF may be scanned or use custom text encoding.")
+
+        for page in document:
+            page.apply_redactions()
+        document.save(str(output_path), garbage=4, deflate=True, clean=True)
+    finally:
+        document.close()
 
 
 def redact_docx(input_path: Path, output_path: Path, findings: List[Dict]) -> None:
     doc = DocxDocument(input_path)
-    replacements = [(finding["raw_value"], replacement_for(finding)) for finding in findings]
+    values = selected_raw_values(findings)
     for paragraph in doc.paragraphs:
-        replace_in_paragraph(paragraph, replacements)
+        redact_docx_paragraph(paragraph, values)
     for table in doc.tables:
         for row in table.rows:
             for cell in row.cells:
                 for paragraph in cell.paragraphs:
-                    replace_in_paragraph(paragraph, replacements)
+                    redact_docx_paragraph(paragraph, values)
     doc.save(output_path)
 
 
-def replace_in_paragraph(paragraph, replacements: List[Tuple[str, str]]) -> None:
-    if not replacements or not paragraph.text:
+def find_value_matches(text: str, values: List[str]) -> List[Tuple[int, int]]:
+    candidates = []
+    for value in values:
+        start = text.find(value)
+        while start != -1:
+            candidates.append((start, start + len(value)))
+            start = text.find(value, start + len(value))
+    candidates.sort(key=lambda item: (item[0], -(item[1] - item[0])))
+
+    matches = []
+    for start, end in candidates:
+        if any(start < kept_end and end > kept_start for kept_start, kept_end in matches):
+            continue
+        matches.append((start, end))
+    return matches
+
+
+def docx_run_at(runs, position: int):
+    cursor = 0
+    for run in runs:
+        next_cursor = cursor + len(run.text)
+        if cursor <= position < next_cursor:
+            return run
+        cursor = next_cursor
+    return runs[-1] if runs else None
+
+
+def copy_docx_run_format(source, target) -> None:
+    if source is None:
         return
-    updated = paragraph.text
-    for original, replacement in replacements:
-        updated = updated.replace(original, replacement)
-    if updated != paragraph.text:
-        paragraph.text = updated
+    target.style = source.style
+    target.bold = source.bold
+    target.italic = source.italic
+    target.underline = source.underline
+    target.font.name = source.font.name
+    target.font.size = source.font.size
+    if source.font.highlight_color is not None:
+        target.font.highlight_color = source.font.highlight_color
+    try:
+        if source.font.color.rgb is not None:
+            target.font.color.rgb = source.font.color.rgb
+    except (AttributeError, ValueError):
+        pass
+
+
+def apply_docx_mask_style(run) -> None:
+    run.font.highlight_color = WD_COLOR_INDEX.BLACK
+    run.font.color.rgb = DocxRGBColor(0, 0, 0)
+
+
+def redact_docx_paragraph(paragraph, values: List[str]) -> None:
+    text = paragraph.text
+    matches = find_value_matches(text, values)
+    if not matches:
+        return
+
+    paragraph_style = paragraph.style
+    alignment = paragraph.alignment
+    runs = list(paragraph.runs)
+    paragraph.clear()
+    paragraph.style = paragraph_style
+    paragraph.alignment = alignment
+
+    cursor = 0
+    for start, end in matches:
+        if cursor < start:
+            source = docx_run_at(runs, cursor)
+            run = paragraph.add_run(text[cursor:start])
+            copy_docx_run_format(source, run)
+        source = docx_run_at(runs, start)
+        run = paragraph.add_run(mask_span(text[start:end]))
+        copy_docx_run_format(source, run)
+        apply_docx_mask_style(run)
+        cursor = end
+    if cursor < len(text):
+        source = docx_run_at(runs, cursor)
+        run = paragraph.add_run(text[cursor:])
+        copy_docx_run_format(source, run)
 
 
 def redact_pptx(input_path: Path, output_path: Path, findings: List[Dict]) -> None:
     prs = Presentation(input_path)
-    replacements = [(finding["raw_value"], replacement_for(finding)) for finding in findings]
+    values = selected_raw_values(findings)
     for slide in prs.slides:
         for shape in slide.shapes:
             if not hasattr(shape, "text_frame") or not shape.text_frame:
                 continue
             for paragraph in shape.text_frame.paragraphs:
-                for run in paragraph.runs:
-                    for original, replacement in replacements:
-                        run.text = run.text.replace(original, replacement)
+                redact_pptx_paragraph(paragraph, values)
     prs.save(output_path)
+
+
+def pptx_run_at(runs, position: int):
+    cursor = 0
+    for run in runs:
+        next_cursor = cursor + len(run.text)
+        if cursor <= position < next_cursor:
+            return run
+        cursor = next_cursor
+    return runs[-1] if runs else None
+
+
+def copy_pptx_run_format(source, target) -> None:
+    if source is None:
+        return
+    target.font.bold = source.font.bold
+    target.font.italic = source.font.italic
+    target.font.underline = source.font.underline
+    target.font.name = source.font.name
+    target.font.size = source.font.size
+    try:
+        if source.font.color.rgb is not None:
+            target.font.color.rgb = source.font.color.rgb
+    except (AttributeError, ValueError):
+        pass
+
+
+def apply_pptx_mask_style(run) -> None:
+    run.font.color.rgb = PptxRGBColor(0, 0, 0)
+
+
+def redact_pptx_paragraph(paragraph, values: List[str]) -> None:
+    text = "".join(run.text for run in paragraph.runs)
+    matches = find_value_matches(text, values)
+    if not matches:
+        return
+
+    runs = list(paragraph.runs)
+    paragraph.clear()
+    cursor = 0
+    for start, end in matches:
+        if cursor < start:
+            source = pptx_run_at(runs, cursor)
+            run = paragraph.add_run()
+            run.text = text[cursor:start]
+            copy_pptx_run_format(source, run)
+        source = pptx_run_at(runs, start)
+        run = paragraph.add_run()
+        run.text = mask_span(text[start:end])
+        copy_pptx_run_format(source, run)
+        apply_pptx_mask_style(run)
+        cursor = end
+    if cursor < len(text):
+        source = pptx_run_at(runs, cursor)
+        run = paragraph.add_run()
+        run.text = text[cursor:]
+        copy_pptx_run_format(source, run)
 
 
 def summarize_documents(docs: Dict[str, Dict]) -> List[Dict]:
@@ -505,8 +686,13 @@ def upload_file():
 
     try:
         extracted_text, metadata = extract_text(original_path, file_type)
-        findings = scan_text(extracted_text)
+        if file_type == "pdf":
+            findings = scan_pdf_pages(metadata.get("page_text", []))
+        else:
+            findings = scan_text(extracted_text)
         risk_level = calculate_risk(findings)
+        public_metadata = dict(metadata)
+        public_metadata.pop("page_text", None)
 
         record = {
             "id": doc_id,
@@ -521,7 +707,7 @@ def upload_file():
             "extraction": {
                 "char_count": len(extracted_text),
                 "word_count": len(extracted_text.split()),
-                "metadata": metadata,
+                "metadata": public_metadata,
             },
         }
         SESSION_DOCS[sid][doc_id] = record
