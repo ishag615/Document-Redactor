@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PrivacyGuard</title>
+  <style>
+    :root {
+      --bg: #f6f7fb;
+      --panel: #ffffff;
+      --text: #111827;
+      --muted: #6b7280;
+      --border: #e5e7eb;
+      --primary: #155e75;
+      --primary-dark: #164e63;
+      --danger: #dc2626;
+      --warning: #b45309;
+      --success: #15803d;
+      --shadow: 0 8px 24px rgba(15, 23, 42, .08);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+      font-family: Inter, "Segoe UI", Arial, sans-serif; font-size: 14px;
+    }
+    .app { width: min(1120px, calc(100% - 32px)); margin: 0 auto; padding: 24px 0 48px; }
+    header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 18px; }
+    h1 { margin: 0; font-size: 26px; letter-spacing: 0; }
+    .subtitle { margin: 4px 0 0; color: var(--muted); line-height: 1.5; }
+    .session-note { color: var(--muted); font-size: 12px; padding-top: 6px; }
+    .nav { display: flex; gap: 8px; margin-bottom: 14px; }
+    .nav a, .nav button {
+      text-decoration: none; border: 1px solid var(--border); background: #fff; color: var(--text);
+      border-radius: 6px; padding: 8px 11px; font-weight: 800; font-size: 12px;
+    }
+    .nav a.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+    .nav button { cursor: pointer; }
+    .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 14px; }
+    .stat { border: 1px solid var(--border); border-radius: 8px; background: #fff; padding: 12px; }
+    .stat-label { color: var(--muted); font-size: 10px; font-weight: 800; text-transform: uppercase; }
+    .stat-value { margin-top: 4px; font-size: 24px; font-weight: 900; }
+    .grid { display: grid; grid-template-columns: 380px 1fr; gap: 18px; align-items: start; }
+    .panel {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+      box-shadow: var(--shadow); overflow: hidden;
+    }
+    .panel-header {
+      padding: 14px 16px; border-bottom: 1px solid var(--border);
+      display: flex; justify-content: space-between; align-items: center; gap: 12px;
+    }
+    .panel-title { margin: 0; font-size: 14px; font-weight: 800; }
+    .panel-body { padding: 16px; }
+    .upload-zone {
+      min-height: 178px; border: 2px dashed #bdd5df; border-radius: 8px;
+      background: #f8fbfd; display: flex; flex-direction: column; justify-content: center;
+      align-items: center; text-align: center; gap: 10px; padding: 22px; cursor: pointer;
+      transition: border-color .15s, background .15s;
+    }
+    .upload-zone:hover, .upload-zone.dragover { border-color: var(--primary); background: #eff9fb; }
+    .upload-zone input { display: none; }
+    .upload-title { font-weight: 800; }
+    .upload-hint { color: var(--muted); font-size: 12px; line-height: 1.45; }
+    .chips, .btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .chip {
+      border: 1px solid var(--border); background: #fff; color: var(--muted);
+      border-radius: 5px; padding: 3px 8px; font-size: 11px; font-weight: 800;
+    }
+    button, .button-link {
+      border: 0; border-radius: 6px; background: var(--primary); color: #fff;
+      font-weight: 800; font-size: 12px; padding: 8px 12px; cursor: pointer; text-decoration: none;
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap;
+    }
+    button:hover, .button-link:hover { background: var(--primary-dark); }
+    button.secondary, .button-link.secondary { background: #e5e7eb; color: var(--text); }
+    button.danger { background: #fee2e2; color: var(--danger); }
+    button:disabled { opacity: .55; cursor: not-allowed; }
+    .status {
+      margin-top: 14px; padding: 12px; border-radius: 8px; border: 1px solid var(--border);
+      background: #f9fafb; color: var(--muted);
+    }
+    .status.error { background: #fef2f2; border-color: #fecaca; color: var(--danger); }
+    .status.success { background: #f0fdf4; border-color: #bbf7d0; color: var(--success); }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 11px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+    th { font-size: 10px; text-transform: uppercase; color: var(--muted); background: #f9fafb; }
+    .file-name { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 800; }
+    .file-type { color: var(--muted); font-size: 11px; margin-top: 2px; text-transform: uppercase; }
+    .risk {
+      display: inline-flex; border-radius: 999px; padding: 3px 8px;
+      font-size: 11px; font-weight: 900; text-transform: uppercase;
+    }
+    .risk-low { background: #dcfce7; color: #166534; }
+    .risk-medium { background: #fef3c7; color: #92400e; }
+    .risk-high { background: #fee2e2; color: #b91c1c; }
+    .risk-critical { background: #7f1d1d; color: #fff; }
+    .empty { padding: 42px 16px; text-align: center; color: var(--muted); }
+    .findings-layout { display: grid; grid-template-columns: 260px 1fr; gap: 18px; align-items: start; }
+    .summary-list { display: grid; gap: 8px; }
+    .summary-item { border: 1px solid var(--border); border-radius: 7px; padding: 10px; background: #fff; }
+    .summary-label { font-size: 11px; font-weight: 900; color: var(--muted); text-transform: uppercase; }
+    .summary-value { margin-top: 4px; font-size: 18px; font-weight: 900; }
+    .finding-group { border-top: 1px solid var(--border); }
+    .group-title {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 12px 16px; background: #f9fafb; font-size: 12px; font-weight: 900;
+    }
+    .finding {
+      display: grid; grid-template-columns: auto 1fr auto auto; gap: 12px;
+      padding: 11px 16px; border-top: 1px solid var(--border); align-items: center;
+    }
+    .finding-title { font-weight: 800; }
+    .finding-meta { color: var(--muted); font-size: 11px; margin-top: 2px; }
+    .masked {
+      font-family: "SF Mono", Consolas, monospace; font-size: 11px;
+      border: 1px solid var(--border); background: #f9fafb; border-radius: 4px; padding: 3px 7px;
+    }
+    input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--primary); }
+    .redaction-bar {
+      position: sticky; bottom: 0; display: flex; justify-content: space-between; align-items: center; gap: 12px;
+      padding: 14px 16px; background: #fff; border-top: 1px solid var(--border);
+    }
+    .hidden { display: none; }
+    @media (max-width: 850px) {
+      header { flex-direction: column; }
+      .grid, .stats, .findings-layout { grid-template-columns: 1fr; }
+      th:nth-child(3), td:nth-child(3) { display: none; }
+      .finding { grid-template-columns: auto 1fr; }
+    }
+  </style>
+</head>
+<body>
+<main class="app">
+  <header>
+    <div>
+      <h1>PrivacyGuard</h1>
+      <p class="subtitle">Upload a TXT, PDF, DOCX, or PPTX file. Review detected PII, choose what to redact, then download a redacted file in the same format.</p>
+    </div>
+    <div class="session-note">Session files are removed when you end the session or the server stops.</div>
+  </header>
+
+  <nav class="nav">
+    <a href="/" id="uploadNav">Upload</a>
+    <a href="#" id="findingsNav" class="hidden">Findings</a>
+    <button class="danger" onclick="endSession()">End Session</button>
+  </nav>
+
+  <section id="dashboardView">
+    <section class="stats">
+      <div class="stat"><div class="stat-label">Files Scanned</div><div class="stat-value" id="totalDocs">0</div></div>
+      <div class="stat"><div class="stat-label">PII Matches</div><div class="stat-value" id="totalFindings">0</div></div>
+      <div class="stat"><div class="stat-label">High Risk Files</div><div class="stat-value" id="highRisk">0</div></div>
+    </section>
+
+    <section class="grid">
+      <div class="panel">
+        <div class="panel-header"><h2 class="panel-title">Upload Document</h2></div>
+        <div class="panel-body">
+          <label class="upload-zone" id="uploadZone">
+            <input type="file" id="fileInput" accept=".txt,.pdf,.docx,.pptx">
+            <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="#155e75" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            <div>
+              <div class="upload-title">Drop a file or click to browse</div>
+              <div class="upload-hint">Text is extracted and scanned. Redaction happens after you review findings.</div>
+            </div>
+          </label>
+          <div class="chips"><span class="chip">TXT</span><span class="chip">PDF</span><span class="chip">DOCX</span><span class="chip">PPTX</span></div>
+          <div id="scanResult"></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <h2 class="panel-title">Current Session</h2>
+          <button class="secondary" onclick="loadDocuments()">Refresh</button>
+        </div>
+        <div id="history"><div class="empty">No files scanned yet.</div></div>
+      </div>
+    </section>
+  </section>
+
+  <section id="findingsView" class="hidden">
+    <div class="findings-layout">
+      <aside class="panel">
+        <div class="panel-header"><h2 class="panel-title">Risk Summary</h2></div>
+        <div class="panel-body">
+          <div id="findingSummary" class="summary-list"></div>
+          <div class="btn-row">
+            <button class="secondary" onclick="selectAllFindings(true)">Select All</button>
+            <button class="secondary" onclick="selectAllFindings(false)">Clear</button>
+          </div>
+        </div>
+      </aside>
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2 class="panel-title" id="findingsTitle">Findings</h2>
+            <div class="file-type" id="findingsMeta"></div>
+          </div>
+          <a href="/" class="button-link secondary">Back to Upload</a>
+        </div>
+        <div id="findingsBody"><div class="empty">Choose a document from the Upload page.</div></div>
+        <div class="redaction-bar">
+          <div id="selectionCount" class="file-type">0 selected</div>
+          <div class="btn-row" style="margin-top:0">
+            <button id="redactBtn" onclick="generateRedacted()">Prepare Redacted File</button>
+            <button id="downloadBtn" class="secondary hidden" onclick="downloadCurrent()">Download Redacted File</button>
+          </div>
+        </div>
+      </section>
+    </div>
+  </section>
+</main>
+
+<script>
+const initialDocId = "{{ initial_doc_id }}";
+let currentDocs = [];
+let activeDocId = initialDocId || '';
+let activeReport = null;
+
+function escHtml(value) {
+  return String(value || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function riskBadge(level) {
+  const risk = String(level || 'LOW').toLowerCase();
+  return `<span class="risk risk-${risk}">${escHtml(level || 'LOW')}</span>`;
+}
+
+function formatDate(value) {
+  if (!value) return '-';
+  return new Date(value).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function showView(name) {
+  document.getElementById('dashboardView').classList.toggle('hidden', name !== 'dashboard');
+  document.getElementById('findingsView').classList.toggle('hidden', name !== 'findings');
+  document.getElementById('uploadNav').classList.toggle('active', name === 'dashboard');
+}
+
+function updateStats(docs) {
+  document.getElementById('totalDocs').textContent = docs.length;
+  document.getElementById('totalFindings').textContent = docs.reduce((sum, doc) => sum + (doc.entity_count || 0), 0);
+  document.getElementById('highRisk').textContent = docs.filter(doc => ['HIGH', 'CRITICAL'].includes(doc.risk_level)).length;
+}
+
+async function loadDocuments() {
+  const response = await fetch('/api/documents');
+  currentDocs = await response.json();
+  updateStats(currentDocs);
+  const history = document.getElementById('history');
+  if (!currentDocs.length) {
+    history.innerHTML = '<div class="empty">No files scanned yet.</div>';
+    return;
+  }
+  history.innerHTML = `
+    <table>
+      <thead><tr><th>File</th><th>Risk</th><th>Scanned</th><th>Actions</th></tr></thead>
+      <tbody>
+        ${currentDocs.map(doc => `
+          <tr>
+            <td><div class="file-name" title="${escHtml(doc.filename)}">${escHtml(doc.filename)}</div><div class="file-type">${escHtml(doc.file_type)}</div></td>
+            <td>${riskBadge(doc.risk_level)}</td>
+            <td style="color:var(--muted);font-size:12px;white-space:nowrap">${formatDate(doc.uploaded_at)}</td>
+            <td>
+              <a class="button-link" href="/findings/${doc.id}">Findings</a>
+              ${doc.has_protected ? `<button class="secondary" onclick="downloadFile('${doc.id}')">Download</button>` : ''}
+              <button class="danger" onclick="deleteFile('${doc.id}')">Delete</button>
+            </td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>`;
+}
+
+async function uploadFile(file) {
+  const scanResult = document.getElementById('scanResult');
+  scanResult.innerHTML = '<div class="status">Scanning extracted text for PII patterns...</div>';
+  const form = new FormData();
+  form.append('file', file);
+  try {
+    const response = await fetch('/api/upload', { method: 'POST', body: form });
+    const result = await response.json();
+    if (!result.success) throw new Error(result.error || 'Upload failed');
+    scanResult.innerHTML = `
+      <div class="status success">
+        <strong>${escHtml(result.filename)}</strong><br>
+        ${escHtml(result.message)}
+      </div>
+      <div class="btn-row">
+        <a class="button-link" href="/findings/${result.document_id}">Review Findings</a>
+      </div>`;
+    document.getElementById('fileInput').value = '';
+    await loadDocuments();
+  } catch (error) {
+    scanResult.innerHTML = `<div class="status error">${escHtml(error.message)}</div>`;
+  }
+}
+
+async function loadFindings(docId) {
+  showView('findings');
+  activeDocId = docId;
+  document.getElementById('findingsNav').classList.remove('hidden');
+  document.getElementById('findingsNav').classList.add('active');
+  document.getElementById('findingsNav').href = `/findings/${docId}`;
+  const response = await fetch(`/api/report/${docId}`);
+  const report = await response.json();
+  if (report.error) {
+    document.getElementById('findingsBody').innerHTML = `<div class="empty">${escHtml(report.error)}</div>`;
+    return;
+  }
+  activeReport = report;
+  renderFindings(report);
+}
+
+function renderFindings(report) {
+  document.getElementById('findingsTitle').textContent = report.document;
+  document.getElementById('findingsMeta').textContent = `${report.file_type.toUpperCase()} · ${report.extraction.char_count.toLocaleString()} characters scanned · ${report.entity_count} finding(s)`;
+  document.getElementById('downloadBtn').classList.toggle('hidden', !report.has_protected);
+
+  const counts = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0 };
+  report.entities.forEach(item => { counts[item.risk_level] = (counts[item.risk_level] || 0) + 1; });
+  document.getElementById('findingSummary').innerHTML = `
+    <div class="summary-item"><div class="summary-label">Overall Risk</div><div class="summary-value">${riskBadge(report.risk_level)}</div></div>
+    <div class="summary-item"><div class="summary-label">Critical</div><div class="summary-value">${counts.CRITICAL}</div></div>
+    <div class="summary-item"><div class="summary-label">High</div><div class="summary-value">${counts.HIGH}</div></div>
+    <div class="summary-item"><div class="summary-label">Medium / Low</div><div class="summary-value">${counts.MEDIUM + counts.LOW}</div></div>`;
+
+  if (!report.entities.length) {
+    document.getElementById('findingsBody').innerHTML = '<div class="empty">No PII patterns matched in this file.</div>';
+    updateSelectionCount();
+    return;
+  }
+
+  const groups = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']
+    .map(risk => [risk, report.entities.filter(item => item.risk_level === risk)])
+    .filter(([, items]) => items.length);
+  document.getElementById('findingsBody').innerHTML = groups.map(([risk, items]) => `
+    <section class="finding-group">
+      <div class="group-title"><span>${risk} Risk</span><span>${items.length} item(s)</span></div>
+      ${items.map(findingRow).join('')}
+    </section>`).join('');
+  updateSelectionCount();
+}
+
+function findingRow(finding) {
+  return `
+    <label class="finding">
+      <input type="checkbox" class="finding-check" value="${finding.id}" checked onchange="updateSelectionCount()">
+      <div>
+        <div class="finding-title">${escHtml(finding.display_name || finding.type)}</div>
+        <div class="finding-meta">Characters ${finding.start}-${finding.end} · ${escHtml(finding.detection_method)}</div>
+      </div>
+      <span class="masked">${escHtml(finding.value)}</span>
+      ${riskBadge(finding.risk_level)}
+    </label>`;
+}
+
+function selectedFindingIds() {
+  return Array.from(document.querySelectorAll('.finding-check:checked')).map(input => input.value);
+}
+
+function updateSelectionCount() {
+  const count = selectedFindingIds().length;
+  document.getElementById('selectionCount').textContent = `${count} selected for redaction`;
+  document.getElementById('redactBtn').disabled = count === 0;
+}
+
+function selectAllFindings(checked) {
+  document.querySelectorAll('.finding-check').forEach(input => { input.checked = checked; });
+  updateSelectionCount();
+}
+
+async function generateRedacted() {
+  const selected_ids = selectedFindingIds();
+  const response = await fetch(`/api/protect/${activeDocId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ selected_ids }),
+  });
+  const result = await response.json();
+  if (!result.success) {
+    alert(result.error || 'Redaction failed');
+    return;
+  }
+  document.getElementById('downloadBtn').classList.remove('hidden');
+  document.getElementById('findingsBody').insertAdjacentHTML('afterbegin', `<div class="status success">Redacted file prepared with ${result.redacted_count} selected item(s).</div>`);
+  await loadDocuments();
+}
+
+function downloadCurrent() {
+  downloadFile(activeDocId);
+}
+
+function downloadFile(docId) {
+  window.location.href = `/api/download/${docId}/protected`;
+}
+
+async function deleteFile(docId) {
+  const response = await fetch(`/api/delete/${docId}`, { method: 'DELETE' });
+  const result = await response.json();
+  if (!result.success) alert(result.error || 'Delete failed');
+  await loadDocuments();
+}
+
+async function endSession() {
+  await fetch('/api/session/end', { method: 'POST' });
+  window.location.href = '/';
+}
+
+const uploadZone = document.getElementById('uploadZone');
+const fileInput = document.getElementById('fileInput');
+fileInput.addEventListener('change', event => {
+  const [file] = event.target.files;
+  if (file) uploadFile(file);
+});
+uploadZone.addEventListener('dragover', event => {
+  event.preventDefault();
+  uploadZone.classList.add('dragover');
+});
+uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('dragover'));
+uploadZone.addEventListener('drop', event => {
+  event.preventDefault();
+  uploadZone.classList.remove('dragover');
+  const [file] = event.dataTransfer.files;
+  if (file) uploadFile(file);
+});
+
+loadDocuments();
+if (initialDocId) {
+  loadFindings(initialDocId);
+} else {
+  showView('dashboard');
+}
+</script>
+</body>
+</html>
