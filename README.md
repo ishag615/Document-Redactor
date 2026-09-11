@@ -1,4 +1,4 @@
-# PrivacyGuard
+# Text Redactor
 
 Text-based PII redaction for TXT, PDF, DOCX, and PPTX files.
 
